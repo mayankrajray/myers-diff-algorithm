@@ -222,21 +222,23 @@ def format_highlight_output(edits):
                     inserts.append(output[i][1])
                 i += 1
             
-            # Pair up deletes and inserts
+            # Compute character ranges for paired lines
             pairs = min(len(deletes), len(inserts))
-            
+            char_ranges = []
             for j in range(pairs):
-                result.append((b"-", deletes[j], None))
                 old_ranges, new_ranges = char_diff_ranges(deletes[j], inserts[j])
-                result.append((b"+", inserts[j], (old_ranges, new_ranges)))
+                char_ranges.append((old_ranges, new_ranges))
             
-            # Add unpaired deletes
-            for j in range(pairs, len(deletes)):
+            # Output ALL deletes first (delete-first rule)
+            for j in range(len(deletes)):
                 result.append((b"-", deletes[j], None))
             
-            # Add unpaired inserts
-            for j in range(pairs, len(inserts)):
-                result.append((b"+", inserts[j], None))
+            # Then output ALL inserts (with ranges for paired ones)
+            for j in range(len(inserts)):
+                if j < pairs:
+                    result.append((b"+", inserts[j], char_ranges[j]))
+                else:
+                    result.append((b"+", inserts[j], None))
     
     return result
 
