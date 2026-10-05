@@ -1,285 +1,217 @@
+"""Myers' O(ND) diff: line diff (Part A) and changed-character ranges (Part B)."""
+
 import sys
 
+USAGE = "usage: main.py lines|highlight A_PATH B_PATH"
 
-def read_file_lines(path):
-    """Read file as raw bytes and split into lines according to spec."""
-    try:
-        with open(path, "rb") as f:
-            content = f.read()
-    except Exception as e:
-        print(f"Error reading file {path}: {e}", file=sys.stderr)
-        return None
-    
-    # Split on newline byte
-    lines = content.split(b"\n")
-    
-    # If last piece is empty, drop it
-    if lines and lines[-1] == b"":
+
+def read_lines(path):
+    with open(path, "rb") as f:
+        lines = f.read().split(b"\n")
+    if lines and not lines[-1]:  # trailing newline is not an extra line
         lines.pop()
-    
     return lines
 
 
-def myers_diff(a, b):
-    """
-    Myers' O(ND) diff algorithm.
-    Returns list of (operation, index_a, index_b, element) tuples.
-    operation: 'keep', 'delete', 'insert'
-    """
-    n = len(a)
-    m = len(b)
-    max_d = n + m
-    
-    # V[k] = x coordinate of the end of furthest reaching path on diagonal k
-    v = {1: 0}
-    trace = []
-    
-    # Search for the shortest edit script
+def middle_snake(A, B, Ar, Br, n, m):
+    """Return the middle snake (sx, sy, ex, ey) of the Myers edit graph."""
+    delta = n - m
+    odd = delta & 1
+    max_d = (n + m + 1) // 2
+    off = max_d + 1
+    vf = [-1] * (2 * max_d + 3)  # furthest x per diagonal (forward)
+    vb = vf[:]                   # furthest x per diagonal (backward)
+    vf[off + 1] = vb[off + 1] = 0
+    fs = fe = bs = be = 0        # active diagonal boundaries
+
     for d in range(max_d + 1):
-        trace.append(v.copy())
-        
-        for k in range(-d, d + 1, 2):
-            # Decide whether to move down or right
-            if k == -d or (k != d and v.get(k - 1, -1) < v.get(k + 1, -1)):
-                # Move down (insert from B)
-                x = v.get(k + 1, 0)
+        # Forward search
+        for k in range(-d + fs, d - fe + 1, 2):
+            i = off + k
+            if k == -d or (k != d and vf[i - 1] < vf[i + 1]):
+                x = vf[i + 1]
             else:
-                # Move right (delete from A)
-                x = v.get(k - 1, 0) + 1
-            
+                x = vf[i - 1] + 1
             y = x - k
-            
-            # Follow diagonal (matching elements)
-            while x < n and y < m and a[x] == b[y]:
+            x0, y0 = x, y
+            while x < n and y < m and A[x] == B[y]:
                 x += 1
                 y += 1
-            
-            v[k] = x
-            
-            # Check if we reached the end
-            if x >= n and y >= m:
-                return backtrack(a, b, trace, d)
-    
-    return []
+            vf[i] = x
+            if x > n:
+                fe += 2
+                continue
+            if y > m:
+                fs += 2
+                continue
+            if odd and -d < delta - k < d:
+                xb = vb[off + delta - k]
+                if xb != -1 and x + xb >= n:
+                    return x0, y0, x, y
 
-
-def backtrack(a, b, trace, d):
-    """Backtrack through the trace to build the edit script."""
-    n = len(a)
-    m = len(b)
-    x, y = n, m
-    
-    edits = []
-    
-    for depth in range(d, -1, -1):
-        v = trace[depth]
-        k = x - y
-        
-        # Determine previous k
-        if k == -depth or (k != depth and v.get(k - 1, -1) < v.get(k + 1, -1)):
-            prev_k = k + 1
-        else:
-            prev_k = k - 1
-        
-        prev_x = v.get(prev_k, 0)
-        prev_y = prev_x - prev_k
-        
-        # Follow diagonal backwards
-        while x > prev_x and y > prev_y:
-            x -= 1
-            y -= 1
-            edits.append(("keep", x, y, a[x]))
-        
-        # Record the edit
-        if depth > 0:
-            if y == prev_y:
-                # Deletion
-                x -= 1
-                edits.append(("delete", x, -1, a[x]))
+        # Backward search
+        for k in range(-d + bs, d - be + 1, 2):
+            i = off + k
+            if k == -d or (k != d and vb[i - 1] < vb[i + 1]):
+                x = vb[i + 1]
             else:
-                # Insertion
-                y -= 1
-                edits.append(("insert", -1, y, b[y]))
-        
-        x, y = prev_x, prev_y
-    
-    edits.reverse()
-    return edits
+                x = vb[i - 1] + 1
+            y = x - k
+            x0, y0 = x, y
+            while x < n and y < m and Ar[x] == Br[y]:
+                x += 1
+                y += 1
+            vb[i] = x
+            if x > n:
+                be += 2
+                continue
+            if y > m:
+                bs += 2
+                continue
+            if not odd and -d <= delta - k <= d:
+                xf = vf[off + delta - k]
+                if xf != -1 and xf + x >= n:
+                    return n - x, m - y, n - x0, m - y0
+
+    raise RuntimeError("middle snake not found")
 
 
-def format_lines_output(edits):
-    """Format the diff for lines command with delete-first ordering."""
-    output = []
-    i = 0
-    
-    while i < len(edits):
-        op = edits[i][0]
-        
-        if op == "keep":
-            # Keep line
-            output.append((b" ", edits[i][3]))
-            i += 1
-        else:
-            # Start of a change block - collect all deletes and inserts
-            deletes = []
-            inserts = []
-            
-            while i < len(edits) and edits[i][0] != "keep":
-                if edits[i][0] == "delete":
-                    deletes.append(edits[i][3])
-                else:  # insert
-                    inserts.append(edits[i][3])
-                i += 1
-            
-            # Output deletes first, then inserts
-            for line in deletes:
-                output.append((b"-", line))
-            for line in inserts:
-                output.append((b"+", line))
-    
-    return output
+def diff_marks(a, b):
+    """Minimal Myers diff. Returns (del_a, ins_b) bytearrays; 1 = edited, 0 = matched."""
+    na, nb = len(a), len(b)
+
+    # Compact integer ID per distinct item.
+    ids = {}
+    ia = [ids.setdefault(x, len(ids)) for x in a]
+    ib = [ids.setdefault(x, len(ids)) for x in b]
+
+    # Items present in only one sequence can never match.
+    in_a, in_b = set(ia), set(ib)
+    ma = [i for i, v in enumerate(ia) if v in in_b]
+    mb = [j for j, v in enumerate(ib) if v in in_a]
+    fa = [ia[i] for i in ma]
+    fb = [ib[j] for j in mb]
+
+    del_f = bytearray(len(fa))
+    ins_f = bytearray(len(fb))
+    stack = [(0, len(fa), 0, len(fb))]  # (a0, a1, b0, b1)
+
+    while stack:
+        a0, a1, b0, b1 = stack.pop()
+
+        while a0 < a1 and b0 < b1 and fa[a0] == fb[b0]:  # common prefix
+            a0 += 1
+            b0 += 1
+        while a0 < a1 and b0 < b1 and fa[a1 - 1] == fb[b1 - 1]:  # common suffix
+            a1 -= 1
+            b1 -= 1
+
+        if a0 == a1:  # only insertions left
+            ins_f[b0:b1] = b"\x01" * (b1 - b0)
+            continue
+        if b0 == b1:  # only deletions left
+            del_f[a0:a1] = b"\x01" * (a1 - a0)
+            continue
+
+        A, B = fa[a0:a1], fb[b0:b1]
+        n, m = a1 - a0, b1 - b0
+        sx, sy, ex, ey = middle_snake(A, B, A[::-1], B[::-1], n, m)
+
+        # Push right half first so the left half is processed next.
+        stack.append((a0 + ex, a1, b0 + ey, b1))
+        stack.append((a0, a0 + sx, b0, b0 + sy))
+
+    # Everything starts as changed; surviving items get their real status.
+    del_a = bytearray(b"\x01") * na
+    ins_b = bytearray(b"\x01") * nb
+    for fi, oi in enumerate(ma):
+        del_a[oi] = del_f[fi]
+    for fi, oi in enumerate(mb):
+        ins_b[oi] = ins_f[fi]
+    return del_a, ins_b
 
 
-def get_codepoints(byte_line):
-    """Convert bytes to list of Unicode code points."""
-    try:
-        text = byte_line.decode("utf-8")
-        return list(text)
-    except:
-        # If not valid UTF-8, treat as bytes
-        return list(byte_line)
+def ranges(marks):
+    """Convert a 0/1 bytearray into 'start-end,...' ranges ('.' if none)."""
+    n = len(marks)
+    parts = []
+    start = marks.find(1)
+    while start != -1:
+        end = marks.find(0, start)
+        if end == -1:
+            end = n
+        parts.append(f"{start}-{end}")
+        if end >= n:
+            break
+        start = marks.find(1, end)
+    return ",".join(parts) or "."
 
 
-def format_ranges(ranges):
-    """Format list of (start, end) tuples as range string."""
-    if not ranges:
-        return "."
-    
-    # Merge adjacent ranges
-    merged = []
-    for start, end in sorted(ranges):
-        if merged and merged[-1][1] == start:
-            merged[-1] = (merged[-1][0], end)
-        else:
-            merged.append((start, end))
-    
-    return ",".join(f"{s}-{e}" for s, e in merged)
+def build_output(a, b, del_a, ins_b, highlight):
+    """Build diff output lines; deletes are emitted before inserts."""
+    na, nb = len(a), len(b)
+    out = []
+    i = j = 0
+
+    while True:
+        nd = del_a.find(1, i)
+        ni = ins_b.find(1, j)
+        if nd == -1 and ni == -1:
+            break
+
+        # Unchanged lines before the next edit.
+        count = na - i
+        if nd != -1:
+            count = min(count, nd - i)
+        if ni != -1:
+            count = min(count, ni - j)
+        if count:
+            out.extend(b" " + line for line in a[i:i + count])
+            i += count
+            j += count
+
+        # One contiguous edit block.
+        de = del_a.find(0, i)
+        de = na if de == -1 else de
+        ie = ins_b.find(0, j)
+        ie = nb if ie == -1 else ie
+        deleted, inserted = a[i:de], b[j:ie]
+
+        out.extend(b"-" + line for line in deleted)
+        for index, line in enumerate(inserted):
+            out.append(b"+" + line)
+            if highlight and index < len(deleted):
+                old = deleted[index].decode("utf-8", "surrogateescape")
+                new = line.decode("utf-8", "surrogateescape")
+                dm, im = diff_marks(old, new)
+                out.append(f"? {ranges(dm)} | {ranges(im)}".encode("utf-8"))
+
+        i, j = de, ie
+
+    out.extend(b" " + line for line in a[i:])  # unchanged tail
+    return out
 
 
-def char_diff_ranges(old_line, new_line):
-    """
-    Compute character-level diff ranges.
-    Returns (old_ranges, new_ranges) as lists of (start, end) tuples.
-    """
-    old_chars = get_codepoints(old_line)
-    new_chars = get_codepoints(new_line)
-    
-    edits = myers_diff(old_chars, new_chars)
-    
-    old_ranges = []
-    new_ranges = []
-    
-    old_pos = 0
-    new_pos = 0
-    
-    for op, _, _, char in edits:
-        if op == "keep":
-            old_pos += 1
-            new_pos += 1
-        elif op == "delete":
-            old_ranges.append((old_pos, old_pos + 1))
-            old_pos += 1
-        elif op == "insert":
-            new_ranges.append((new_pos, new_pos + 1))
-            new_pos += 1
-    
-    return (old_ranges, new_ranges)
-
-
-def format_highlight_output(edits):
-    """Format the diff for highlight command with character ranges."""
-    output = format_lines_output(edits)
-    
-    # Find change blocks and pair lines
-    i = 0
-    result = []
-    
-    while i < len(output):
-        prefix, line = output[i]
-        
-        if prefix == b" ":
-            result.append((prefix, line, None))
-            i += 1
-        else:
-            # Start of change block
-            deletes = []
-            inserts = []
-            
-            while i < len(output) and output[i][0] != b" ":
-                if output[i][0] == b"-":
-                    deletes.append(output[i][1])
-                else:  # b"+"
-                    inserts.append(output[i][1])
-                i += 1
-            
-            # Compute character ranges for paired lines
-            pairs = min(len(deletes), len(inserts))
-            char_ranges = []
-            for j in range(pairs):
-                old_ranges, new_ranges = char_diff_ranges(deletes[j], inserts[j])
-                char_ranges.append((old_ranges, new_ranges))
-            
-            # Output ALL deletes first (delete-first rule)
-            for j in range(len(deletes)):
-                result.append((b"-", deletes[j], None))
-            
-            # Then output ALL inserts (with ranges for paired ones)
-            for j in range(len(inserts)):
-                if j < pairs:
-                    result.append((b"+", inserts[j], char_ranges[j]))
-                else:
-                    result.append((b"+", inserts[j], None))
-    
-    return result
-
-
-def main() -> int:
+def main():
     if len(sys.argv) != 4 or sys.argv[1] not in ("lines", "highlight"):
-        print("usage: main.py lines|highlight A_PATH B_PATH", file=sys.stderr)
+        print(USAGE, file=sys.stderr)
         return 2
-    
-    command, a_path, b_path = sys.argv[1:]
-    
-    # Read both files as raw bytes
-    a_lines = read_file_lines(a_path)
-    b_lines = read_file_lines(b_path)
-    
-    if a_lines is None or b_lines is None:
+
+    try:
+        a = read_lines(sys.argv[2])
+        b = read_lines(sys.argv[3])
+    except OSError as exc:
+        print(f"error: cannot read file: {exc}", file=sys.stderr)
         return 2
-    
-    # Compute diff using Myers' algorithm
-    edits = myers_diff(a_lines, b_lines)
-    
-    # Format and print output
-    if command == "lines":
-        output = format_lines_output(edits)
-        for prefix, line in output:
-            sys.stdout.buffer.write(prefix + line + b"\n")
-    else:  # highlight
-        output = format_highlight_output(edits)
-        for item in output:
-            if len(item) == 3:
-                prefix, line, ranges = item
-                sys.stdout.buffer.write(prefix + line + b"\n")
-                if ranges is not None:
-                    old_ranges, new_ranges = ranges
-                    range_line = f"? {format_ranges(old_ranges)} | {format_ranges(new_ranges)}\n"
-                    sys.stdout.buffer.write(range_line.encode("utf-8"))
-            else:
-                prefix, line = item
-                sys.stdout.buffer.write(prefix + line + b"\n")
-    
+
+    del_a, ins_b = diff_marks(a, b)
+    output = build_output(a, b, del_a, ins_b, sys.argv[1] == "highlight")
+
+    if output:
+        sys.stdout.buffer.write(b"\n".join(output) + b"\n")
+        sys.stdout.buffer.flush()
     return 0
 
 
-raise SystemExit(main())
+if __name__ == "__main__":
+    raise SystemExit(main())
